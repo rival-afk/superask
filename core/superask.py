@@ -79,9 +79,9 @@ class SuperASK:
         if command.startswith("sudo ") and not sua.is_sudo_enabled():
             return "[SA] Права sudo не выданы. Используйте /suaon для включения."
 
-        tool_result = tools.shell_tool.execute({"command": command})
+        result = tools.shell_tool.execute({"command": command, "description": command[:60]})
         self.current_command = None
-        return tool_result
+        return result.output
 
     def execute_tool(self, tool_name: str, params: dict) -> str:
         if not self.running:
@@ -89,6 +89,7 @@ class SuperASK:
 
         tool = tools.get_tool(tool_name)
         if not tool:
-            return f"[SA] Инструмент '{tool_name}' не найден"
+            return f"[SA] Инструмент '{tool_name}' не найден. Доступны: {', '.join(tools.get_all_tools().keys())}"
 
-        return tool.execute(params)
+        result = tool.execute(params)
+        return result.output

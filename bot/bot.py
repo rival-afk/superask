@@ -186,7 +186,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     result = sa.execute_command(text)
 
-    await update.message.reply_text(f"✅ Результат:\n```\n{result[:4000]}\n```")
+    MAX_LEN = 4000
+    if len(result) > MAX_LEN:
+        result = result[:MAX_LEN] + "\n... [output truncated]"
+
+    await update.message.reply_text(f"✅ Результат:\n```\n{result}\n```")
 
 
 def main():

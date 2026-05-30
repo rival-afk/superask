@@ -1,0 +1,16 @@
+[Unit]
+Description=Super ASK — Telegram bot for remote PC control
+After=network.target network-online.target
+Wants=network-online.target wakeonlan.service
+
+[Service]
+Type=simple
+User=mikhail
+WorkingDirectory=/home/mikhail/desktop/superask
+ExecStart=/home/mikhail/desktop/superask/cli.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
