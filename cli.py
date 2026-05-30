@@ -164,8 +164,6 @@ def cmd_status():
     # Сервис superask
     if _check_systemd():
         try:
-            agent_r = subprocess.run(["systemctl", "is-active", "superask-agent"], capture_output=True, text=True, timeout=5)
-            agent_status = agent_r.stdout.strip()
             r = subprocess.run(["systemctl", "is-active", "superask"], capture_output=True, text=True, timeout=5)
             status = r.stdout.strip()
             if status == "active":
@@ -180,10 +178,22 @@ def cmd_status():
             else:
                 print(f"  Сервис superask:    ❌ {status}")
                 _e("  Подсказка: sudo systemctl start superask; sa logs")
-            print(f"  Агент:              {'✅ активен' if agent_status == 'active' else '❌ не активен'}")
-
         except:
             print(f"  Сервис superask:    ❓ не удалось проверить")
+
+        try:
+            agent_exists = subprocess.run(
+                ["systemctl", "cat", "superask-agent"], capture_output=True, timeout=5
+            ).returncode == 0
+            if agent_exists:
+                agent_r = subprocess.run(["systemctl", "is-active", "superask-agent"], capture_output=True, text=True, timeout=5)
+                agent_status = agent_r.stdout.strip()
+                print(f"  Агент:              {'✅ активен' if agent_status == 'active' else '❌ остановлен'}")
+            else:
+                print(f"  Агент:              ⚪ не запущен")
+                _e("  Запустите: sa agent on")
+        except:
+            print(f"  Агент:              ❓ не удалось проверить")
 
         try:
             r = subprocess.run(["systemctl", "is-enabled", "superask"], capture_output=True, text=True, timeout=5)
@@ -469,6 +479,12 @@ def cmd_agent(args):
         if not server_url:
             _die("Сначала укажите URL сервера: sa server <url>")
         _ensure_agent_dir()
+        agent_py = PROJECT_DIR / "agent" / "agent.py"
+        agent_py.chmod(0o755)
+        # Устанавливаем requests если нет
+        venv_pip = PROJECT_DIR / ".venv" / "bin" / "pip"
+        if venv_pip.exists():
+            subprocess.run([str(venv_pip), "install", "requests"], capture_output=True, timeout=30)
         user = os.environ.get("USER", "root")
         service_content = AGENT_SERVICE % (user, PROJECT_DIR, server_url, PROJECT_DIR)
         svc_path = Path("/tmp/superask-agent.service")
