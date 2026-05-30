@@ -395,7 +395,11 @@ def main():
 
 
 def _main():
-    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
+    if len(sys.argv) < 2:
+        from bot import bot
+        return bot.main()
+
+    if sys.argv[1] in ("-h", "--help", "help"):
         cmd_help()
         return
 
