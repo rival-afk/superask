@@ -5,6 +5,7 @@ Telegram-бот для управления Super ASK.
 import asyncio
 import logging
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -428,7 +429,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Команда выполнена (ошибка форматирования вывода)")
 
 
-def main():
+def _build_app():
     token = config.get_bot_token()
     if not token:
         log.critical("Токен бота не задан!")
@@ -466,24 +467,32 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     app.add_error_handler(error_handler)
+    return app
 
-    log.info("Super ASK бот запущен. Ожидание команд...")
-    try:
-        app.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,
-            close_loop=False,
-        )
-    except InvalidToken:
-        log.critical("Токен бота невалиден при подключении.")
-        sys.exit(1)
-    except NetworkError as e:
-        log.critical(f"Ошибка сети при подключении к Telegram: {e}")
-        log.critical("Проверьте интернет-соединение.")
-        sys.exit(1)
-    except Exception as e:
-        log.critical(f"Критическая ошибка бота: {e}")
-        sys.exit(1)
+
+def main():
+    RETRY_DELAY = 10
+    while True:
+        try:
+            app = _build_app()
+            log.info("Super ASK бот запущен. Ожидание команд...")
+            app.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+                close_loop=False,
+            )
+        except InvalidToken:
+            log.critical("Токен бота невалиден при подключении.")
+            sys.exit(1)
+        except (NetworkError, TimedOut) as e:
+            log.warning(f"Сетевая ошибка: {e}. Повтор через {RETRY_DELAY}с...")
+            time.sleep(RETRY_DELAY)
+        except (RetryAfter) as e:
+            log.warning(f"Flood control. Ждём {e.retry_after}с...")
+            time.sleep(e.retry_after)
+        except Exception as e:
+            log.error(f"Критическая ошибка бота: {e}. Повтор через {RETRY_DELAY}с...")
+            time.sleep(RETRY_DELAY)
 
 
 if __name__ == "__main__":
