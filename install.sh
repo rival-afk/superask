@@ -3,7 +3,7 @@
 # Установщик Super ASK
 # Запуск: bash install.sh
 #
-set -u
+set -eo pipefail
 
 # ─────────── Цвета ───────────
 RED='\033[0;31m'
@@ -29,10 +29,14 @@ check_os() {
         fail "Файл /etc/os-release не найден. Не удаётся определить ОС."
     fi
 
-    . /etc/os-release
-    info "  ОС: $NAME $VERSION_ID ($ID)"
+    # shellcheck source=/dev/null
+    . /etc/os-release 2>/dev/null || true
+    OS_NAME="${NAME:-Unknown}"
+    OS_VERSION="${VERSION_ID:-rolling}"
+    OS_ID="${ID:-linux}"
+    info "  ОС: $OS_NAME $OS_VERSION ($OS_ID)"
 
-    case "$ID" in
+    case "$OS_ID" in
         arch|archarm|manjaro|endeavour|artix|cachyos|garuda|arcolinux)
             PKG_MANAGER="pacman"
             PYTHON_PKG="python"
@@ -54,7 +58,7 @@ check_os() {
             PYTHON_PKG="python3"
             ;;
         *)
-            warn "Неизвестный дистрибутив '$ID'. Установка может не сработать."
+            warn "Неизвестный дистрибутив '$OS_ID'. Установка может не сработать."
             PKG_MANAGER=""
             PYTHON_PKG="python3"
             ;;
@@ -130,11 +134,14 @@ check_permissions() {
 
     if ! sudo -n true 2>/dev/null; then
         warn "Для некоторых шагов потребуется sudo."
-        warn "  Если будет запрошен пароль — введите его."
-    fi
-
-    if ! sudo -v; then
-        fail "Нет прав sudo. Установка невозможна."
+        warn "  Подтвердите пароль в sudo, если потребуется."
+        # Пробуем выполнить sudo считывая пароль через терминал
+        if ! sudo -v 2>/dev/null; then
+            # Если терминал не интерактивный, пытаемся выполнить простую команду
+            if ! sudo true 2>/dev/null; then
+                fail "Нет прав sudo. Установка невозможна."
+            fi
+        fi
     fi
 
     ok "Права доступа: OK"
