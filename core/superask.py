@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import signal
+import random
 import threading
 from pathlib import Path
 
@@ -73,12 +74,10 @@ class SuperASK:
 
     def _start_ping(self):
         def ping_loop():
-            counter = 0
             while not self._stop_event.is_set():
-                counter += 10
-                if counter <= 30:
-                    print(f"[SA] ПИНГ {counter} с. SA РАБОТАЕТ")
-                time.sleep(10)
+                interval = random.randint(60, 300)
+                print(f"[SA] ПИНГ {interval} с. SA РАБОТАЕТ")
+                self._stop_event.wait(interval)
         self._ping_thread = threading.Thread(target=ping_loop, daemon=True)
         self._ping_thread.start()
 

@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: superask
+    env: python
+    region: frankfurt
+    buildCommand: pip install -r render/requirements.txt
+    startCommand: uvicorn render.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_USER_ID
+        sync: false
+    healthCheckPath: /health

@@ -13,6 +13,9 @@ DEFAULT_CONFIG = {
     "sudo_enabled": False,
     "session_active": False,
     "session_pid": None,
+    "proxy_url": "",
+    "proxy_enabled": False,
+    "server_url": "",
 }
 
 
@@ -150,3 +153,52 @@ def get_model() -> dict:
         "api": cfg.get("model_api", "zen"),
         "model": cfg.get("model_name", "deepseek-v4-flash-free"),
     }
+
+
+def validate_proxy(url: str) -> bool:
+    if not url:
+        return True
+    url = url.strip()
+    if not url.startswith(("http://", "https://", "socks5://", "socks5h://")):
+        return False
+    return True
+
+
+def set_proxy(url: str):
+    url = url.strip().strip("\"'")
+    if not validate_proxy(url):
+        print("[SA] Ошибка: URL прокси должен начинаться с http://, https://, socks5:// или socks5h://", file=sys.stderr)
+        return
+    cfg = load()
+    cfg["proxy_url"] = url
+    cfg["proxy_enabled"] = True
+    save(cfg)
+
+
+def get_proxy() -> str:
+    cfg = load()
+    if cfg.get("proxy_enabled"):
+        return cfg.get("proxy_url", "")
+    return ""
+
+
+def clear_proxy():
+    cfg = load()
+    cfg["proxy_url"] = ""
+    cfg["proxy_enabled"] = False
+    save(cfg)
+
+
+def set_server_url(url: str):
+    url = url.strip().strip("\"'").rstrip("/")
+    if not url.startswith("http"):
+        print("[SA] URL должен начинаться с http:// или https://", file=sys.stderr)
+        return
+    cfg = load()
+    cfg["server_url"] = url
+    save(cfg)
+
+
+def get_server_url() -> str:
+    cfg = load()
+    return cfg.get("server_url", "")

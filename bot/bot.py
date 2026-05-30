@@ -443,8 +443,13 @@ def _build_app():
 
     log.info(f"Запуск Super ASK бота (токен: {token[:12]}...)")
 
+    proxy = config.get_proxy()
+    builder = Application.builder().token(token)
+    if proxy:
+        log.info(f"Используется прокси: {proxy[:40]}...")
+        builder = builder.proxy_url(proxy).connect_kwargs({"timeout": 30})
     try:
-        app = Application.builder().token(token).build()
+        app = builder.build()
     except InvalidToken:
         log.critical("Токен бота отклонён Telegram. Проверьте токен.")
         sys.exit(1)
