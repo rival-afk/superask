@@ -20,6 +20,9 @@ import time
 import asyncio
 import logging
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
