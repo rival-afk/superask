@@ -3,17 +3,17 @@
 Super ASK (SA) — CLI для управления системой из терминала.
 
 Использование:
-  superask bot <token>           — Установить токен Telegram-бота
-  superask userid <id>           — Установить ID администратора
-  superask model <op> <api> <m>  — Сменить модель
-  superask status                — Статус системы и сервиса
-  superask wol                   — Информация Wake-on-LAN
-  superask tools                 — Список всех инструментов
-  superask shell <cmd>           — Выполнить команду
-  superask restart               — Перезапустить сервис superask
-  superask logs                  — Логи сервиса superask
-  superask install               — Запустить установщик
-  superask help                  — Эта справка
+  sa bot <token>                — Установить токен Telegram-бота
+  sa userid <id>                — Установить ID администратора
+  sa model <op> <api> <m>       — Сменить модель
+  sa status                     — Статус системы и сервиса
+  sa wol                        — Информация Wake-on-LAN
+  sa tools                      — Список всех инструментов
+  sa shell <cmd>                — Выполнить команду
+  sa restart                    — Перезапустить сервис superask
+  sa logs                       — Логи сервиса superask
+  sa install                    — Запустить установщик
+  sa help                       — Эта справка
 
 Без аргументов — запускает Telegram-бота (foreground).
 """
@@ -52,7 +52,7 @@ def _check_systemd() -> bool:
 def cmd_bot(token):
     """Установить токен Telegram-бота"""
     if not token:
-        _die("Укажите токен: superask bot <token>")
+        _die("Укажите токен: sa bot <token>")
 
     token = token.strip().strip("\"'")
     if not config.validate_token(token):
@@ -68,9 +68,9 @@ def cmd_bot(token):
                 subprocess.run(["sudo", "systemctl", "restart", "superask"], capture_output=True, text=True, timeout=30)
                 print("[SA] Сервис перезапущен.")
             else:
-                print("[SA] Запустите сервис: superask restart")
+                print("[SA] Запустите сервис: sa restart")
         except:
-            print("[SA] Запустите сервис: superask restart")
+            print("[SA] Запустите сервис: sa restart")
     else:
         print("[SA] Запустите бота: superask (без аргументов)")
 
@@ -78,7 +78,7 @@ def cmd_bot(token):
 def cmd_userid(uid):
     """Установить ID администратора Telegram"""
     if not uid:
-        _die("Укажите ID: superask userid <telegram_id>")
+        _die("Укажите ID: sa userid <telegram_id>")
 
     try:
         uid_int = int(uid)
@@ -97,8 +97,8 @@ def cmd_userid(uid):
 def cmd_model(args):
     """Сменить модель нейросети"""
     if len(args) < 3:
-        _die("Использование: superask model <operator> <api> <model>\n"
-             "  Например: superask model opencode zen deepseek-v4-flash-free")
+        _die("Использование: sa model <operator> <api> <model>\n"
+             "  Например: sa model opencode zen deepseek-v4-flash-free")
 
     config.set_model(args[0], args[1], args[2])
     print(f"[SA] Модель изменена: {args[0]} / {args[1]} / {args[2]}")
@@ -124,10 +124,10 @@ def cmd_status():
             print(f"  Токен бота:         ✅ {token[:12]}...")
         else:
             print(f"  Токен бота:         ❌ невалидный токен ({token[:12]}...)")
-            _e("  Подсказка: superask bot <новый_токен>")
+            _e("  Подсказка: sa bot <новый_токен>")
     else:
         print(f"  Токен бота:         ❌ не задан")
-        _e("  Подсказка: superask bot <токен_от_BotFather>")
+        _e("  Подсказка: sa bot <токен_от_BotFather>")
 
     admin_id = config.get_admin_user_id()
     if admin_id:
@@ -262,11 +262,11 @@ def cmd_tools():
 def cmd_shell(command: str):
     """Выполнить команду в shell"""
     if not command:
-        _die("Укажите команду: superask shell <command>")
+        _die("Укажите команду: sa shell <command>")
 
     print(f"[SA] Выполняется: {command}")
     try:
-        result = tools.shell_tool.execute({"command": command, "description": "superask shell", "timeout": 60000})
+        result = tools.shell_tool.execute({"command": command, "description": "sa shell", "timeout": 60000})
         output = result.output
         if not output:
             print("[SA] Команда выполнена (пустой вывод)")
@@ -284,7 +284,7 @@ def cmd_restart():
     token = config.get_bot_token()
     if not token:
         _e("Предупреждение: токен бота не задан. Сервис не сможет запуститься.")
-        _e("Установите токен: superask bot <token>")
+        _e("Установите токен: sa bot <token>")
         if input("  Всё равно перезапустить? [y/N] ").lower() not in ("y", "yes"):
             print("[SA] Отменено.")
             return
@@ -306,7 +306,7 @@ def cmd_restart():
                 _e("Сервис запускается... (возможно, нет токена)")
             else:
                 _e(f"Сервис не активен: {status}")
-                _e("Проверьте логи: superask logs")
+                _e("Проверьте логи: sa logs")
         else:
             _e(f"Не удалось перезапустить сервис (код: {r.returncode})")
             _e(f"stderr: {r.stderr}")
@@ -398,13 +398,13 @@ def _main():
     args = sys.argv[2:]
 
     commands = {
-        "bot": lambda: cmd_bot(args[0]) if args else _die("Укажите токен: superask bot <token>"),
-        "userid": lambda: cmd_userid(args[0]) if args else _die("Укажите ID: superask userid <id>"),
+        "bot": lambda: cmd_bot(args[0]) if args else _die("Укажите токен: sa bot <token>"),
+        "userid": lambda: cmd_userid(args[0]) if args else _die("Укажите ID: sa userid <id>"),
         "model": lambda: cmd_model(args),
         "status": cmd_status,
         "wol": cmd_wol,
         "tools": cmd_tools,
-        "shell": lambda: cmd_shell(" ".join(args)) if args else _die("Укажите команду: superask shell <command>"),
+        "shell": lambda: cmd_shell(" ".join(args)) if args else _die("Укажите команду: sa shell <command>"),
         "restart": cmd_restart,
         "logs": cmd_logs,
         "install": cmd_install,

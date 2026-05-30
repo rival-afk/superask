@@ -282,7 +282,7 @@ phase_shebang() {
 
 # ─────────── Фаза 4: symlink ───────────
 phase_symlink() {
-    BIN_LINK="/usr/local/bin/superask"
+    BIN_LINK="/usr/local/bin/sa"
     info "[4/6] Установка symlink..."
 
     if [ -L "$BIN_LINK" ] || [ -f "$BIN_LINK" ]; then
@@ -559,16 +559,16 @@ main() {
     echo " Быстрый старт:"
     echo ""
     echo "   1. Установите токен бота:"
-    echo -e "      ${GREEN}superask bot 123456789:ABCdef...${NC}"
+    echo -e "      ${GREEN}sa bot 123456789:ABCdef...${NC}"
     echo ""
     echo "   2. Установите ID администратора (опционально):"
-    echo -e "      ${GREEN}superask userid <ваш_telegram_id>${NC}"
+    echo -e "      ${GREEN}sa userid <ваш_telegram_id>${NC}"
     echo ""
     echo "   3. Запустите сервис:"
-    echo -e "      ${GREEN}superask restart${NC}"
+    echo -e "      ${GREEN}sa restart${NC}"
     echo ""
     echo "   4. Проверьте статус:"
-    echo -e "      ${GREEN}superask status${NC}"
+    echo -e "      ${GREEN}sa status${NC}"
     echo ""
     echo "   5. Для отправки magic packet WoL:"
     echo -e "      ${GREEN}wakeonlan 8c:16:45:ff:40:15${NC}"

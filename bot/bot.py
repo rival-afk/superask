@@ -62,7 +62,7 @@ async def error_handler(update: Update | None, context: ContextTypes.DEFAULT_TYP
     log.error(f"Traceback:\n{tb}")
 
     if isinstance(context.error, InvalidToken):
-        log.critical("Токен бота невалиден! Проверьте: superask bot <новый_токен>")
+        log.critical("Токен бота невалиден! Проверьте: sa bot <новый_токен>")
         return
 
     if isinstance(context.error, RetryAfter):
@@ -94,7 +94,7 @@ async def error_handler(update: Update | None, context: ContextTypes.DEFAULT_TYP
 
     if update and update.message:
         try:
-            await update.message.reply_text("❌ Произошла внутренняя ошибка. Проверьте логи: superask logs")
+            await update.message.reply_text("❌ Произошла внутренняя ошибка. Проверьте логи: sa logs")
         except:
             pass
 
@@ -342,7 +342,7 @@ async def sa_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.info("Токен бота обновлён")
         await update.message.reply_text("✅ Токен бота обновлён.\n"
                                        "⚠️ Перезапустите бота для применения нового токена:\n"
-                                       "   superask restart (в терминале)")
+                                       "   sa restart (в терминале)")
 
     elif cmd == "model":
         if len(args) < 4:
@@ -432,7 +432,7 @@ def main():
     token = config.get_bot_token()
     if not token:
         log.critical("Токен бота не задан!")
-        log.critical("Установите токен: superask bot <токен_от_BotFather>")
+        log.critical("Установите токен: sa bot <токен_от_BotFather>")
         sys.exit(1)
 
     if not config.validate_token(token):
