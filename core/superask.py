@@ -26,6 +26,18 @@ class SuperASK:
         self._stop_event = threading.Event()
         self._ping_thread = None
 
+    def check_config_ready(self) -> list[str]:
+        warnings = []
+        if not config.get_bot_token():
+            warnings.append("❌ Не задан токен Telegram-бота. Установите: /SA bot <токен>")
+        if config.get_admin_user_id() is None:
+            warnings.append("⚠️ Не задан ID администратора. Любой может управлять ботом. Установите: /SA userid <ID>")
+        if not sua.is_sudo_enabled():
+            warnings.append("⚠️ Права sudo не выданы. Если нужны — используйте /suaon")
+        if not sua.get_sudo_password_hash():
+            warnings.append("⚠️ Пароль sudo не сохранён. Если нужны sudo-команды: /sua <пароль>")
+        return warnings
+
     def start(self) -> bool:
         self.running = True
         self.session_active = True
@@ -74,10 +86,26 @@ class SuperASK:
         if not self.running:
             return "[SA] Система остановлена. Используйте /on для запуска."
 
+        command = command.strip()
+        if not command:
+            return "[SA] Пустая команда. Напишите что-нибудь."
+
         self.current_command = command
 
-        if command.startswith("sudo ") and not sua.is_sudo_enabled():
-            return "[SA] Права sudo не выданы. Используйте /suaon для включения."
+        if command.startswith("sudo "):
+            if not sua.is_sudo_enabled():
+                return (
+                    "[SA] Права sudo не выданы. Сначала настройте SUA:\n"
+                    "  1. /sua <пароль> — сохранить пароль sudo\n"
+                    "  2. /suaon — выдать права sudo нейросети\n"
+                    "Либо используйте команду без sudo."
+                )
+            if not sua.get_sudo_password_hash():
+                return (
+                    "[SA] Пароль sudo не сохранён в SUA.\n"
+                    "  Используйте: /sua <пароль_от_sudo>\n"
+                    "  Чтобы нейросеть могла выполнять sudo-команды."
+                )
 
         result = tools.shell_tool.execute({"command": command, "description": command[:60]})
         self.current_command = None
@@ -89,7 +117,11 @@ class SuperASK:
 
         tool = tools.get_tool(tool_name)
         if not tool:
-            return f"[SA] Инструмент '{tool_name}' не найден. Доступны: {', '.join(tools.get_all_tools().keys())}"
+            available = ", ".join(tools.get_all_tools().keys())
+            return f"[SA] Инструмент '{tool_name}' не найден.\nДоступны: {available}"
+
+        if not params:
+            return "[SA] Не переданы параметры для инструмента."
 
         result = tool.execute(params)
         return result.output

@@ -102,11 +102,25 @@ async def error_handler(update: Update | None, context: ContextTypes.DEFAULT_TYP
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     log.info(f"Команда /start от user_id={user.id} username=@{user.username}")
-    await update.message.reply_text(
+
+    msg = (
         "🤖 <b>Super ASK</b> — система удалённого управления ПК через Telegram.\n\n"
-        "Используйте /help для списка команд.",
-        parse_mode="HTML",
+        "Используйте /help для списка команд.\n\n"
     )
+
+    if not is_admin(update):
+        admin_id = config.get_admin_user_id()
+        msg += f"⛔ Доступ ограничен. Этот бот принадлежит пользователю ID: {admin_id}"
+        await update.message.reply_text(msg, parse_mode="HTML")
+        return
+
+    warnings = sa.check_config_ready()
+    if warnings:
+        msg += "📋 <b>Статус настройки:</b>\n" + "\n".join(warnings)
+    else:
+        msg += "✅ Все настройки выполнены."
+
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,64 +146,121 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sudo_status = "✅ Доступны" if sua.is_sudo_enabled() else "❌ Не запрошены"
     model = config.get_model()
-    await update.message.reply_text(
-        f"🤖 <b>Super ASK</b>\n\n"
-        f"📡 Модель: {model['operator']} / {model['api']} / {model['model']}\n"
-        f"🔑 Sudo: {sudo_status}\n"
-        f"⚙️ Статус: {'🟢 Активен' if sa.running else '🔴 Остановлен'}\n"
-        f"🛠 Инструментов: {len(tools.get_all_tools())}",
-        parse_mode="HTML",
-    )
+    lines = [
+        "🤖 <b>Super ASK — Диагностика</b>",
+        "",
+        f"📡 Модель: {model['operator']} / {model['api']} / {model['model']}",
+        f"⚙️ Статус: {'🟢 Активен' if sa.running else '🔴 Остановлен'}"
+    ]
+
+    if sa.running:
+        lines.append(f"🛠 Инструментов: {len(tools.get_all_tools())}")
+    else:
+        lines.append("🛠 Инструменты не загружены (SA остановлен)")
+
+    lines.append("")
+    lines.append("<b>Проверка SUA:</b>")
+
+    if sua.is_sudo_enabled():
+        lines.append("✅ Права sudo: выданы")
+    else:
+        lines.append("❌ Права sudo: не выданы")
+        lines.append("   → Используйте /sua <пароль>, затем /suaon")
+
+    if sua.get_sudo_password_hash():
+        lines.append("✅ Пароль sudo: сохранён")
+    else:
+        lines.append("❌ Пароль sudo: не сохранён")
+        lines.append("   → Используйте /sua <пароль_от_sudo>")
+
+    lines.append("")
+    lines.append("<b>Проверка конфигурации:</b>")
+    warnings = sa.check_config_ready()
+    if warnings:
+        lines.extend(warnings)
+    else:
+        lines.append("✅ Все настройки выполнены (токен, админ, SUA)")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 async def turn_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sa.is_permanently_disabled():
-        await update.message.reply_text("⛔ Super ASK перманентно отключён.\n"
-                                       "Для включения измените конфиг вручную.")
+        await update.message.reply_text(
+            "⛔ Super ASK перманентно отключён.\n"
+            "Для включения измените конфиг вручную:\n"
+            "  nano ~/.config/superask/config.json\n"
+            "  (установите permanently_disabled: false)"
+        )
         return
     if sa.running:
-        await update.message.reply_text("Super ASK уже запущен.")
+        await update.message.reply_text("Super ASK уже запущен. Используйте /test для проверки.")
         return
     sa.start()
     log.info("Super ASK включён")
-    await update.message.reply_text("🟢 Super ASK запущен. Команды принимаются.")
+
+    msg = "🟢 Super ASK запущен. Команды принимаются."
+
+    warnings = sa.check_config_ready()
+    if warnings:
+        msg += "\n\n⚠️ <b>Есть незавершённые настройки:</b>\n" + "\n".join(warnings)
+        msg += "\n\nИспользуйте /test для полной диагностики."
+
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 
 async def turn_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not sa.running:
-        await update.message.reply_text("Super ASK уже остановлен.")
+        await update.message.reply_text("Super ASK уже остановлен. Используйте /on для запуска.")
         return
     sa.stop()
     log.info("Super ASK выключен")
-    await update.message.reply_text("🔴 Super ASK остановлен.")
+    await update.message.reply_text("🔴 Super ASK остановлен. Команды больше не принимаются.\nДля включения: /on")
 
 
 async def turn_off_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not sa.session_active:
+        await update.message.reply_text("Нет активной сессии для завершения.")
+        return
     sa.stop_session()
     log.info("Сессия Super ASK завершена")
-    await update.message.reply_text("⏹ Текущая сессия Super ASK завершена.")
+    await update.message.reply_text("⏹ Текущая сессия Super ASK завершена.\nSuper ASK остановлен.")
 
 
 async def turn_off_permanent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sa.disable_permanently()
     log.warning("Super ASK перманентно отключён")
-    await update.message.reply_text("⛔ Super ASK перманентно отключён.\n"
-                                   "Для включения отредактируйте config.json вручную.")
+    await update.message.reply_text(
+        "⛔ Super ASK перманентно отключён.\n"
+        "Теперь включить можно только через терминал:\n"
+        "  superask shell 'sed -i \"s/permanently_disabled.*/permanently_disabled: false/\" ~/.config/superask/config.json'\n"
+        "  Или вручную отредактировать config.json."
+    )
 
 
 async def sua_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if args:
-        password = args[0]
+        password = " ".join(args)
         if len(password) < 4:
             await update.message.reply_text("❌ Пароль должен быть минимум 4 символа.")
             return
         sua.set_password(password)
         log.info("Пароль sudo сохранён")
-        await update.message.reply_text("🔑 Пароль sudo сохранён в SUA.")
+        await update.message.reply_text(
+            "🔑 Пароль sudo сохранён в SUA.\n"
+            "Теперь выдайте права: /suaon\n"
+            "Либо используйте /sua без пароля для автоматического включения."
+        )
     else:
+        if not sua.get_sudo_password_hash():
+            await update.message.reply_text(
+                "❌ Сначала сохраните пароль sudo.\n"
+                "Используйте: /sua <пароль_от_sudo>\n\n"
+                "После этого можно будет выдать права sudo нейросети."
+            )
+            return
         sua.set_sudo_enabled(True)
         log.info("Права sudo выданы без подтверждения")
         await update.message.reply_text(
@@ -205,18 +276,34 @@ async def sua_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def sua_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not sua.get_sudo_password_hash():
+        await update.message.reply_text(
+            "❌ Не удалось выдать права sudo.\n"
+            "Сначала сохраните пароль: /sua <пароль_от_sudo>\n\n"
+            "SUA использует этот пароль для выполнения sudo-команд."
+        )
+        return
     sua.set_sudo_enabled(True)
     log.info("Права sudo выданы")
-    await update.message.reply_text("🔓 Права sudo выданы для Super ASK.")
+    await update.message.reply_text(
+        "🔓 Права sudo выданы для Super ASK.\n"
+        "Теперь нейросеть может выполнять команды с sudo."
+    )
 
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not sa.running:
+        await update.message.reply_text("Super ASK остановлен. Нечего останавливать.")
+        return
     if sa.current_command:
         sa.current_command = None
         log.info("Текущий процесс остановлен пользователем")
         await update.message.reply_text("⏹ Текущий активный процесс остановлен.")
     else:
-        await update.message.reply_text("Нет активного процесса для остановки.")
+        await update.message.reply_text(
+            "Нет активного процесса для остановки.\n"
+            "Если хотите остановить SA: /off"
+        )
 
 
 async def sa_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -275,24 +362,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not sa.running:
-        await update.message.reply_text("Super ASK не запущен. Используйте /on.")
+        await update.message.reply_text(
+            "Super ASK не запущен. Используйте /on.\n"
+            "Если хотите проверить настройки: /test"
+        )
         return
 
     text = update.message.text
     if not text or text.startswith("/"):
         return
 
+    text = text.strip()
+
     log.info(f"Выполнение команды: {text[:100]}...")
-    await update.message.reply_text("⚙️ Команда выполняется...")
+
+    if text.lower().startswith("sudo "):
+        if not sua.is_sudo_enabled():
+            await update.message.reply_text(
+                "❌ Команда требует sudo, но права не выданы.\n\n"
+                "Чтобы настроить:\n"
+                "  1. /sua <пароль> — сохранить пароль\n"
+                "  2. /suaon — выдать права\n\n"
+                "Либо уберите sudo из команды."
+            )
+            return
+        if not sua.get_sudo_password_hash():
+            await update.message.reply_text(
+                "❌ Пароль sudo не сохранён в SUA.\n"
+                "Используйте: /sua <пароль_от_sudo>\n"
+                "Затем повторите команду."
+            )
+            return
+        await update.message.reply_text("⚙️ Выполняется sudo-команда...")
+    else:
+        await update.message.reply_text("⚙️ Команда выполняется...")
 
     try:
         result = sa.execute_command(text)
     except Exception as e:
         log.error(f"Ошибка выполнения команды: {e}")
-        await update.message.reply_text(f"❌ Ошибка выполнения: {e}")
+        await update.message.reply_text(
+            f"❌ Ошибка выполнения:\n<code>{e}</code>\n\n"
+            "Проверьте команду и попробуйте снова.",
+            parse_mode="HTML",
+        )
         return
 
-    MAX_LEN = 4000
+    MAX_LEN = 3900
     if len(result) > MAX_LEN:
         result = result[:MAX_LEN] + "\n\n... [вывод обрезан]"
 
@@ -302,11 +418,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text(f"✅ Результат:\n```\n{result}\n```", parse_mode="Markdown")
     except BadRequest:
-        result_clean = result.replace("`", "").replace("*", "").replace("_", "")
-        await update.message.reply_text(f"✅ Результат:\n{result_clean[:4000]}")
+        try:
+            result_clean = result.replace("`", "").replace("*", "").replace("_", "")
+            await update.message.reply_text(f"✅ Результат:\n{result_clean[:4000]}")
+        except Exception:
+            await update.message.reply_text("✅ Команда выполнена. Вывод слишком большой для отображения.")
     except Exception as e:
         log.error(f"Ошибка отправки результата: {e}")
-        await update.message.reply_text(f"✅ Команда выполнена (ошибка форматирования вывода)")
+        await update.message.reply_text("✅ Команда выполнена (ошибка форматирования вывода)")
 
 
 def main():

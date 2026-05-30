@@ -49,6 +49,10 @@ def set_sudo_enabled(enabled: bool):
     cfg["sudo_enabled"] = enabled
     save_config(cfg)
 
+def get_sudo_password_hash() -> str | None:
+    cfg = load_config()
+    return cfg.get("sudo_password_hash")
+
 def get_password() -> str | None:
     cfg = load_config()
     return cfg.get("sudo_password")
