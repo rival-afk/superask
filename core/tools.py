@@ -48,12 +48,20 @@ class Tool:
 
 
 def _run_shell(cmd: str, timeout: int = 60, workdir: str | None = None) -> str:
+    if not cmd or not cmd.strip():
+        return "[error] Пустая команда"
+
+    if not isinstance(timeout, (int, float)) or timeout <= 0:
+        timeout = 60
+    if timeout > 3600:
+        return "[error] Таймаут не может превышать 3600 секунд (1 час)"
+
     try:
         result = subprocess.run(
             cmd, shell=True, capture_output=True, text=True, timeout=timeout,
             cwd=workdir,
         )
-        output = result.stdout
+        output = result.stdout or ""
         if result.stderr:
             output += f"\n[stderr]\n{result.stderr}"
         if result.returncode != 0:
@@ -61,13 +69,27 @@ def _run_shell(cmd: str, timeout: int = 60, workdir: str | None = None) -> str:
         return output
     except subprocess.TimeoutExpired:
         return f"[timeout] Команда превысила лимит {timeout}с"
+    except PermissionError:
+        return "[error] Нет прав на выполнение команды"
+    except FileNotFoundError:
+        return "[error] Команда не найдена"
+    except OSError as e:
+        return f"[error] Системная ошибка: {e}"
     except Exception as e:
         return f"[error] {e}"
 
 
 # ── shell ──────────────────────────────────────────────────────────────
-def shell_execute(command: str, description: str = "", workdir: str | None = None, timeout: int = 60) -> ToolResult:
-    output = _run_shell(command, timeout, workdir)
+def shell_execute(command: str, description: str = "", workdir: str | None = None, timeout: int = 60000) -> ToolResult:
+    if not command or not command.strip():
+        return ToolResult("[error] Пустая команда")
+
+    if timeout and timeout > 0:
+        timeout_sec = timeout / 1000
+    else:
+        timeout_sec = 60
+
+    output = _run_shell(command, timeout_sec, workdir)
     return ToolResult(output, title=description or command[:60])
 
 
@@ -85,19 +107,40 @@ shell_tool = Tool(
 
 # ── read ───────────────────────────────────────────────────────────────
 def read_file(filePath: str, offset: int = 0, limit: int | None = None) -> ToolResult:
-    p = Path(filePath).expanduser()
+    if not filePath or not filePath.strip():
+        return ToolResult("[error] Укажите путь к файлу")
+
+    try:
+        p = Path(filePath).expanduser().resolve()
+    except RuntimeError:
+        return ToolResult(f"[error] Некорректный путь: {filePath}")
+
     if not p.exists():
-        return ToolResult(f"[error] Файл не найден: {filePath}")
+        return ToolResult(f"[error] Файл не найден: {p}")
     if not p.is_file():
-        return ToolResult(f"[error] Не является файлом: {filePath}")
-    content = p.read_text()
+        return ToolResult(f"[error] Не является файлом: {p}")
+
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace")
+    except PermissionError:
+        return ToolResult(f"[error] Нет прав на чтение: {p}")
+    except OSError as e:
+        return ToolResult(f"[error] Ошибка чтения {p}: {e}")
+
+    total_lines = content.count("\n") + 1
+
     if offset > 0:
         lines = content.splitlines()
+        if offset > len(lines):
+            return ToolResult(f"[error] Строка {offset} больше общего числа строк ({total_lines})")
         content = "\n".join(lines[offset - 1:])
-    if limit:
+
+    if limit and limit > 0:
         lines = content.splitlines()
-        content = "\n".join(lines[:limit])
-    return ToolResult(content, title=str(p))
+        if limit < len(lines):
+            content = "\n".join(lines[:limit]) + f"\n... [показано {limit} из {len(lines)} строк]"
+
+    return ToolResult(content, title=str(p), metadata={"lines": total_lines})
 
 
 read_tool = Tool(
@@ -113,14 +156,50 @@ read_tool = Tool(
 
 # ── write ──────────────────────────────────────────────────────────────
 def write_file(filePath: str, content: str) -> ToolResult:
-    p = Path(filePath).expanduser()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    old_content = p.read_text() if p.exists() else ""
-    p.write_text(content)
-    diff = "".join(difflib.unified_diff(
-        old_content.splitlines(True), content.splitlines(True),
-        fromfile=str(p), tofile=str(p)
-    ))
+    if not filePath or not filePath.strip():
+        return ToolResult("[error] Укажите путь к файлу")
+    if content is None:
+        return ToolResult("[error] Содержимое файла не может быть None")
+
+    try:
+        p = Path(filePath).expanduser().resolve()
+    except RuntimeError:
+        return ToolResult(f"[error] Некорректный путь: {filePath}")
+
+    if p.exists() and not p.is_file():
+        return ToolResult(f"[error] Путь существует и не является файлом: {p}")
+
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        return ToolResult(f"[error] Нет прав на создание директории: {p.parent}")
+
+    old_content = ""
+    if p.exists():
+        try:
+            old_content = p.read_text(encoding="utf-8", errors="replace")
+        except (PermissionError, OSError):
+            old_content = ""
+
+    try:
+        p.write_text(content, encoding="utf-8")
+    except PermissionError:
+        return ToolResult(f"[error] Нет прав на запись: {p}")
+    except IsADirectoryError:
+        return ToolResult(f"[error] {p} является директорией")
+    except OSError as e:
+        return ToolResult(f"[error] Ошибка записи {p}: {e}")
+
+    diff = ""
+    if old_content:
+        try:
+            diff = "".join(difflib.unified_diff(
+                old_content.splitlines(True), content.splitlines(True),
+                fromfile=str(p), tofile=str(p)
+            ))
+        except:
+            pass
+
     return ToolResult("Wrote file successfully.", title=str(p), metadata={"diff": diff})
 
 
@@ -136,29 +215,59 @@ write_tool = Tool(
 
 # ── edit ───────────────────────────────────────────────────────────────
 def edit_file(filePath: str, oldString: str, newString: str, replaceAll: bool = False) -> ToolResult:
-    p = Path(filePath).expanduser()
+    if not filePath or not filePath.strip():
+        return ToolResult("[error] Укажите путь к файлу")
+
+    try:
+        p = Path(filePath).expanduser().resolve()
+    except RuntimeError:
+        return ToolResult(f"[error] Некорректный путь: {filePath}")
+
     if not p.exists():
         return ToolResult(f"[error] Файл не найден: {filePath}")
-    content = p.read_text()
+    if not p.is_file():
+        return ToolResult(f"[error] Не является файлом: {filePath}")
+
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace")
+    except PermissionError:
+        return ToolResult(f"[error] Нет прав на чтение: {p}")
+    except OSError as e:
+        return ToolResult(f"[error] Ошибка чтения {p}: {e}")
 
     if not oldString:
-        new_content = newString + "\n" + content if not content.endswith("\n") else newString + "\n" + content
+        new_content = (newString + "\n" + content) if not content.endswith("\n") else (newString + "\n" + content)
     elif replaceAll:
         if oldString not in content:
-            return ToolResult("[error] Строка для замены не найдена")
+            return ToolResult("[error] Строка для замены не найдена в файле")
         new_content = content.replace(oldString, newString)
     else:
-        if content.count(oldString) > 1:
-            return ToolResult("[error] Найдено несколько вхождений. Используйте больше контекста в oldString или replaceAll=true")
-        if oldString not in content:
-            return ToolResult("[error] Строка для замены не найдена")
+        count = content.count(oldString)
+        if count == 0:
+            return ToolResult("[error] Строка для замены не найдена в файле")
+        if count > 1:
+            return ToolResult(f"[error] Найдено {count} вхождений. Добавьте больше контекста в oldString или используйте replaceAll=true")
         new_content = content.replace(oldString, newString, 1)
 
-    p.write_text(new_content)
-    diff = "".join(difflib.unified_diff(
-        content.splitlines(True), new_content.splitlines(True),
-        fromfile=str(p), tofile=str(p)
-    ))
+    if content == new_content:
+        return ToolResult("[warn] Замена не изменила содержимое файла. oldString и newString совпадают?")
+
+    try:
+        p.write_text(new_content, encoding="utf-8")
+    except PermissionError:
+        return ToolResult(f"[error] Нет прав на запись: {p}")
+    except OSError as e:
+        return ToolResult(f"[error] Ошибка записи {p}: {e}")
+
+    diff = ""
+    try:
+        diff = "".join(difflib.unified_diff(
+            content.splitlines(True), new_content.splitlines(True),
+            fromfile=str(p), tofile=str(p)
+        ))
+    except:
+        pass
+
     return ToolResult("Edit applied successfully.", title=str(p), metadata={"diff": diff})
 
 
@@ -229,18 +338,57 @@ grep_tool = Tool(
 
 # ── webfetch ───────────────────────────────────────────────────────────
 def webfetch_fetch(url: str, format: str = "markdown", timeout: int = 30) -> ToolResult:
+    if not url or not url.strip():
+        return ToolResult("[error] Укажите URL")
+
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        return ToolResult(f"[error] URL должен начинаться с http:// или https://")
+
+    if timeout < 1:
+        timeout = 30
+    if timeout > 120:
+        timeout = 120
+
+    import urllib.request
     try:
-        import urllib.request
-        req = urllib.request.Request(url, headers={"User-Agent": "SuperASK/1.0"})
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "SuperASK/1.0 (Telegram bot; +https://github.com/youcapybara228-svg/superask)"}
+        )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             content = resp.read().decode("utf-8", errors="replace")
+
         if format == "text":
             import re
             content = re.sub(r"<[^>]+>", " ", content)
             content = re.sub(r"\s+", " ", content).strip()
-        return ToolResult(content[:20000], title=f"Fetched {url}")
+        elif format == "html":
+            pass
+        else:
+            try:
+                import html2text
+                h = html2text.HTML2Text()
+                h.ignore_links = False
+                h.body_width = 0
+                content = h.handle(content)
+            except ImportError:
+                pass
+
+        if len(content) > 50000:
+            content = content[:50000] + "\n\n... [вывод обрезан до 50000 символов]"
+
+        return ToolResult(content, title=f"Fetched {url[:80]}...")
+    except urllib.error.HTTPError as e:
+        return ToolResult(f"[error] HTTP {e.code}: {e.reason} для {url}")
+    except urllib.error.URLError as e:
+        return ToolResult(f"[error] Не удалось подключиться к {url}: {e.reason}")
+    except ValueError:
+        return ToolResult(f"[error] Некорректный URL: {url}")
+    except OSError as e:
+        return ToolResult(f"[error] Сетевая ошибка: {e}")
     except Exception as e:
-        return ToolResult(f"[error] Не удалось загрузить {url}: {e}")
+        return ToolResult(f"[error] {e}")
 
 
 webfetch_tool = Tool(
@@ -457,23 +605,42 @@ todowrite_tool = Tool(
 
 # ── apply_patch ────────────────────────────────────────────────────────
 def apply_patch(patchText: str) -> ToolResult:
+    if not patchText or not patchText.strip():
+        return ToolResult("[error] Пустой патч")
+
+    import tempfile
+    tmp = None
     try:
-        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False)
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False, encoding="utf-8")
         tmp.write(patchText)
         tmp.close()
+
+        if not shutil.which("patch"):
+            return ToolResult("[error] Утилита 'patch' не найдена. Установите: sudo pacman -S patch")
+
         result = subprocess.run(
             ["patch", "-p0", "-i", tmp.name],
             capture_output=True, text=True, timeout=30
         )
-        os.unlink(tmp.name)
-        output = result.stdout
+        output = result.stdout or ""
         if result.stderr:
             output += f"\n[stderr]\n{result.stderr}"
         if result.returncode != 0:
             output += f"\n[exit code: {result.returncode}]"
+            return ToolResult(output, title="Patch failed")
         return ToolResult(output, title="Patch applied")
+    except subprocess.TimeoutExpired:
+        return ToolResult("[timeout] Применение патча превысило 30с")
+    except FileNotFoundError:
+        return ToolResult("[error] patch не найден")
     except Exception as e:
         return ToolResult(f"[error] {e}")
+    finally:
+        if tmp and os.path.exists(tmp.name):
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
 
 
 apply_patch_tool = Tool(
@@ -489,13 +656,38 @@ apply_patch_tool = Tool(
 SKILLS_DIR = Path(__file__).parent.parent / "skills"
 
 def skill_load(name: str) -> ToolResult:
+    if not name or not name.strip():
+        return ToolResult("[error] Укажите имя скилла")
+
+    name = name.strip()
+
     skill_file = SKILLS_DIR / f"{name}.md"
     if not skill_file.exists():
-        available = [p.stem for p in SKILLS_DIR.glob("*.md")] if SKILLS_DIR.exists() else []
+        skill_file = SKILLS_DIR / f"{name}.txt"
+    if not skill_file.exists():
+        available = []
+        if SKILLS_DIR.exists():
+            try:
+                available = sorted(p.stem for p in SKILLS_DIR.glob("*.md"))
+                available.extend(sorted(p.stem for p in SKILLS_DIR.glob("*.txt")))
+            except OSError:
+                pass
+
         if available:
             return ToolResult(f"[error] Скилл '{name}' не найден. Доступны: {', '.join(available)}")
-        return ToolResult(f"[error] Скилл '{name}' не найден. Нет доступных скиллов.")
-    content = skill_file.read_text()
+        return ToolResult(f"[error] Скилл '{name}' не найден. Нет доступных скиллов.\n"
+                          f"Создайте файл {SKILLS_DIR / name}.md с инструкциями.")
+
+    try:
+        content = skill_file.read_text(encoding="utf-8", errors="replace")
+    except PermissionError:
+        return ToolResult(f"[error] Нет прав на чтение скилла: {skill_file}")
+    except OSError as e:
+        return ToolResult(f"[error] Ошибка чтения скилла: {e}")
+
+    if not content.strip():
+        return ToolResult(f"[warn] Скилл '{name}' пуст")
+
     return ToolResult(
         f"<skill_content name=\"{name}\">\n{content}\n</skill_content>",
         title=f"Loaded skill: {name}",
