@@ -149,10 +149,15 @@ def cmd_status():
             if status == "active":
                 print(f"  Сервис superask:    ✅ активен")
             elif status == "activating":
-                print(f"  Сервис superask:    ⏳ запускается (нет токена?)")
+                if token and config.validate_token(token):
+                    print(f"  Сервис superask:    ⏳ запускается...")
+                    _e("  Если зависло, проверьте логи: sa logs")
+                else:
+                    print(f"  Сервис superask:    ⏳ не запущен (нет токена)")
+                    _e("  Установите токен: sa bot <токен_от_BotFather>")
             else:
                 print(f"  Сервис superask:    ❌ {status}")
-                _e("  Подсказка: sudo systemctl start superask")
+                _e("  Подсказка: sudo systemctl start superask; sa logs")
         except:
             print(f"  Сервис superask:    ❓ не удалось проверить")
 
