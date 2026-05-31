@@ -6,6 +6,7 @@ Super ASK — Render server
   proxy — HTTPS-прокси для Telegram API (бот на ПК)
 """
 import os
+import sys
 import json
 import uuid
 import time
