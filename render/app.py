@@ -200,6 +200,8 @@ async def _send_result(task: dict):
 async def health():
     return {
         "status": "ok",
+        "version": "2.0",
+        "bot_configured": bool(CONFIG["bot_token"]),
         "pending": sum(1 for t in TASKS.values() if t["status"] == "pending"),
     }
 
