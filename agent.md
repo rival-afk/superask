@@ -4,12 +4,23 @@
 
 Репозиторий: https://github.com/youcapybara228-svg/superask.git
 
-## Render хостинг
+## Архитектура
+
+```
+Telegram ←webhook→ Render (FastAPI) ←poll→ Agent (AI + tools) на ПК
+```
+
+- **Render** — релей: получает сообщение из Telegram, кладёт в очередь, забирает ответ, шлёт обратно
+- **Agent** — AI-цикл: промпт → opencode/zen → tool calls → execute → результат → AI → ответ
+
+## Файлы
 
 - `render/app.py` — FastAPI сервер для Render (webhook + task queue)
 - `render/requirements.txt` — зависимости для Render
 - `render/render.yaml` — конфиг деплоя
-- `agent/agent.py` — локальный агент (опрашивает Render, выполняет команды)
+- `agent/agent.py` — локальный агент (опрашивает Render, отправляет промпты в AI)
+- `core/ai.py` — AI-клиент (opencode/zen API, цикл tool calling)
+- `core/tools.py` — 13 opencode-инструментов (shell, read, write, edit, и т.д.)
 
 ### Деплой Render
 1. Создать Web Service на render.com из репозитория
@@ -23,6 +34,7 @@
 
 ### Локальный агент
 ```bash
-export SUPERASK_SERVER=https://<app>.onrender.com
-python agent/agent.py
+sa server https://<app>.onrender.com
+sa apikey <ключ_с_opencode.ai/zen>
+sa agent on
 ```

@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
 Super ASK — Local Agent
-Периодически опрашивает Render-сервер на наличие задач,
-выполняет их локально (команды, системные действия, конфиг, SUA),
-отправляет результат обратно.
 
-Запуск:
-  export SUPERASK_SERVER=https://<app>.onrender.com
-  python agent/agent.py
+Режимы:
+  1. proxy (по умолчанию) — запускает Telegram-бота локально,
+     используя Render как HTTPS-прокси для Telegram API.
+  2. relay (SA_MODE=relay) — опрашивает Render через task queue.
 """
 import sys
 import os
 import json
 import time
+import asyncio
+import subprocess
 import logging
 from pathlib import Path
 
@@ -23,11 +23,9 @@ VENV_PY = PROJECT_DIR / ".venv" / "bin" / "python3"
 if VENV_PY.exists() and sys.executable != str(VENV_PY):
     os.execv(str(VENV_PY), [str(VENV_PY)] + sys.argv)
 
-import requests
-from core import tools
-from core import config as local_config
-from core.superask import SuperASK
-from sua import sua
+MODE = os.environ.get("SA_AGENT_MODE", "proxy")
+SERVER_URL = os.environ.get("SUPERASK_SERVER", "").rstrip("/")
+POLL_INTERVAL = 2
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] AGENT: %(message)s",
@@ -36,117 +34,151 @@ logging.basicConfig(
 )
 log = logging.getLogger("superask.agent")
 
-SERVER_URL = os.environ.get("SUPERASK_SERVER", "").rstrip("/")
-POLL_INTERVAL = 2
 
-sa = SuperASK()
-
-
-def execute_task(task: dict) -> dict:
-    task_type = task["type"]
-    params = task.get("params", {})
-
-    if task_type == "command":
-        command = params.get("command", "")
-        if not command:
-            return {"success": False, "error": "Пустая команда"}
-        result = sa.execute_command(command)
-        return {"success": True, "result": result}
-
-    if task_type == "system":
-        action = params.get("action", "")
-        if action == "on":
-            ok = sa.start()
-            return {"success": ok, "result": "Super ASK запущен" if ok else "Ошибка запуска"}
-        if action == "off":
-            sa.stop()
-            return {"success": True, "result": "Super ASK остановлен"}
-        if action == "off_session":
-            sa.stop_session()
-            return {"success": True, "result": "Сессия завершена"}
-        if action == "off_permanent":
-            sa.disable_permanently()
-            return {"success": True, "result": "Super ASK отключён навсегда"}
-        if action == "stop_process":
-            sa.current_command = None
-            return {"success": True, "result": "Процесс остановлен"}
-        if action == "test":
-            model = local_config.get_model()
-            lines = [
-                f"🤖 Super ASK — Диагностика",
-                f"",
-                f"📡 Модель: {model['operator']} / {model['api']} / {model['name']}",
-                f"⚙️ Статус: {'🟢 Активен' if sa.running else '🔴 Остановлен'}",
-                f"🛠 Инструментов: {len(tools.get_all_tools())}",
-                f"",
-                f"<b>SUA:</b>",
-                f"{'✅ Права sudo выданы' if sua.is_sudo_enabled() else '❌ Права sudo не выданы'}",
-                f"{'✅ Пароль sudo сохранён' if sua.get_sudo_password_hash() else '❌ Пароль sudo не сохранён'}",
-                f"",
-                f"<b>Конфигурация:</b>",
-            ]
-            warnings = sa.check_config_ready()
-            if warnings:
-                lines.extend(warnings)
-            else:
-                lines.append("✅ Все настройки выполнены")
-            return {"success": True, "result": "\n".join(lines)}
-        return {"success": False, "error": f"Неизвестное действие: {action}"}
-
-    if task_type == "sua":
-        action = params.get("action", "")
-        if action == "set_password":
-            pw = params.get("password", "")
-            if len(pw) < 4:
-                return {"success": False, "error": "Пароль должен быть минимум 4 символа"}
-            sua.set_password(pw)
-            return {"success": True, "result": "🔑 Пароль sudo сохранён"}
-        if action == "enable":
-            if not sua.get_sudo_password_hash():
-                return {"success": False, "error": "Сначала сохраните пароль: /sua <пароль>"}
-            sua.set_sudo_enabled(True)
-            return {"success": True, "result": "🤖 Права sudo выданы"}
-        if action == "disable":
-            sua.set_sudo_enabled(False)
-            return {"success": True, "result": "🔒 Права sudo отозваны"}
-        if action == "grant":
-            if not sua.get_sudo_password_hash():
-                return {"success": False, "error": "Сначала сохраните пароль: /sua <пароль>"}
-            sua.set_sudo_enabled(True)
-            return {"success": True, "result": "🔓 Права sudo выданы"}
-        return {"success": False, "error": f"Неизвестное действие SUA: {action}"}
-
-    if task_type == "config":
-        key = params.get("key", "")
-        value = params.get("value")
-        if key == "admin_user_id":
-            local_config.set_admin_user_id(int(value))
-            return {"success": True, "result": f"✅ Владелец изменён на ID {value}"}
-        if key == "model":
-            local_config.set_model(value["operator"], value["api"], value["name"])
-            return {"success": True, "result": f"✅ Модель изменена: {value['operator']} / {value['api']} / {value['name']}"}
-        if key == "bot_token":
-            local_config.set_bot_token(value)
-            return {"success": True, "result": "✅ Токен обновлён"}
-        return {"success": False, "error": f"Неизвестный ключ: {key}"}
-
-    return {"success": False, "error": f"Неизвестный тип задачи: {task_type}"}
+def _notify(title: str, message: str):
+    try:
+        subprocess.run(
+            ["notify-send", "-a", "Super ASK", title, message[:200]],
+            capture_output=True, timeout=5,
+        )
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
 
 
-def main():
-    if not SERVER_URL:
-        log.critical("Установите SUPERASK_SERVER")
-        log.critical("  export SUPERASK_SERVER=https://my-app.onrender.com")
+# ═══════════════════════════════════════════
+#  MODE: proxy — локальный бот через Render-прокси
+# ═══════════════════════════════════════════
+
+def run_proxy_mode():
+    """Запускает Telegram-бота локально, используя Render как прокси."""
+    from telegram import Update
+    from telegram.ext import (
+        Application, CommandHandler, MessageHandler, filters,
+        ContextTypes,
+    )
+    from telegram.error import InvalidToken, TimedOut, NetworkError, RetryAfter
+    from core import config as local_config
+    from core import ai
+
+    CONTEXTS: dict[int, list[dict]] = {}
+    MAX_CONTEXT = 20
+
+    token = local_config.get_bot_token()
+    if not token:
+        log.critical("Токен бота не задан! sa bot <token>")
         sys.exit(1)
 
-    log.info(f"Подключение к {SERVER_URL}")
-    log.info("Ожидание задач...")
+    api_key = local_config.get_api_key()
+    if not api_key:
+        log.critical("API-ключ не задан! sa apikey <ключ>")
+        sys.exit(1)
+
+    base_url = f"{SERVER_URL}/proxy/bot" if SERVER_URL else None
+    log.info(f"Запуск локального бота через {base_url or 'прямое соединение'}")
+
+    builder = Application.builder().token(token)
+    if base_url:
+        builder = builder.base_url(base_url)
+    app = builder.build()
+
+    async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_text(
+            "🤖 <b>Super ASK</b> — AI-агент для ПК.\n\n"
+            "Основан на <b>opencode</b> (github.com/anomalyco/opencode)\n"
+            "Напиши, что нужно сделать.",
+            parse_mode="HTML",
+        )
+
+    async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        text = update.message.text
+        if not text or text.startswith("/"):
+            return
+
+        chat_id = update.effective_chat.id
+        log.info(f"Промпт: {text[:100]}...")
+        _notify("Super ASK", f"⏳ {text[:100]}...")
+
+        ctx = CONTEXTS.get(chat_id, [])
+        result = ai.process_prompt(text, context=ctx)
+
+        response = result.get("response", "")
+        tool_log = result.get("tool_log", "")
+        rounds = result.get("rounds", 0)
+        elapsed = result.get("elapsed", 0)
+
+        CONTEXTS.setdefault(chat_id, [])
+        CONTEXTS[chat_id].append({"role": "user", "content": text})
+        CONTEXTS[chat_id].append({"role": "assistant", "content": response})
+        CONTEXTS[chat_id] = CONTEXTS[chat_id][-MAX_CONTEXT * 2:]
+
+        final = response
+        if tool_log and rounds > 1:
+            final = f"{response}\n\n📋 Выполнено ({rounds} шаг, {elapsed:.1f}с):\n<code>{tool_log[:2000]}</code>"
+        elif rounds > 1:
+            final = f"{response}\n\n⚡ {rounds} шагов за {elapsed:.1f}с"
+
+        try:
+            await update.message.reply_text(final.strip()[:4000])
+        except Exception as e:
+            log.error(f"Ошибка отправки: {e}")
+
+        _notify("Super ASK", f"✅ Ответ получен ({elapsed:.1f}с)")
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    log.info("Бот запущен, ожидание команд...")
+    _notify("Super ASK", "Бот запущен")
+
+    RETRY_DELAY = 10
+    while True:
+        try:
+            app.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+                close_loop=False,
+            )
+        except InvalidToken:
+            log.critical("Токен невалиден!")
+            sys.exit(1)
+        except (NetworkError, TimedOut) as e:
+            log.warning(f"Сетевая ошибка: {e}. Повтор через {RETRY_DELAY}с...")
+            time.sleep(RETRY_DELAY)
+        except RetryAfter as e:
+            log.warning(f"Flood control. Ждём {e.retry_after}с...")
+            time.sleep(e.retry_after)
+        except Exception as e:
+            log.error(f"Ошибка бота: {e}. Повтор через {RETRY_DELAY}с...")
+            time.sleep(RETRY_DELAY)
+
+
+# ═══════════════════════════════════════════
+#  MODE: relay — опрос Render через task queue
+# ═══════════════════════════════════════════
+
+def run_relay_mode():
+    """Опрашивает Render, получает задачи, выполняет, возвращает результат."""
+    import requests
+    from core import config as local_config
+    from core import ai
+
+    CONTEXTS: dict[int, list[dict]] = {}
+    MAX_CONTEXT = 20
+
+    if not SERVER_URL:
+        log.critical("Установите SUPERASK_SERVER")
+        sys.exit(1)
+
+    log.info(f"Relay-режим: {SERVER_URL}")
+    _notify("Super ASK", "Агент запущен (relay)")
 
     while True:
         try:
             resp = requests.get(f"{SERVER_URL}/agent/task", timeout=10)
             if resp.status_code != 200:
-                log.warning(f"Ошибка сервера: {resp.status_code}")
                 time.sleep(POLL_INTERVAL)
                 continue
 
@@ -156,30 +188,59 @@ def main():
                 continue
 
             tid = data["id"]
-            log.info(f"Задача {tid[:8]}: {data['type']} / {data.get('params', {})}")
+            text = data.get("text", "")
+            chat_id = data.get("chat_id", 0)
+            log.info(f"Задача {tid[:8]}: {text[:80]}...")
+            _notify("Super ASK", f"⏳ {text[:100]}...")
 
-            result = execute_task(data)
+            ctx = CONTEXTS.get(chat_id, [])
+            result = ai.process_prompt(text, context=ctx)
+            response = result.get("response", "")
+            tool_log = result.get("tool_log", "")
+            rounds = result.get("rounds", 0)
+            elapsed = result.get("elapsed", 0)
 
-            status = "✅" if result["success"] else "❌"
-            preview = (result.get("result") or result.get("error") or "")[:100]
+            CONTEXTS.setdefault(chat_id, [])
+            CONTEXTS[chat_id].append({"role": "user", "content": text})
+            CONTEXTS[chat_id].append({"role": "assistant", "content": response})
+            CONTEXTS[chat_id] = CONTEXTS[chat_id][-MAX_CONTEXT * 2:]
+
+            final = response
+            if tool_log and rounds > 1:
+                final = f"{response}\n\n📋 Выполнено ({rounds} шаг, {elapsed:.1f}с):\n<code>{tool_log[:2000]}</code>"
+            elif rounds > 1:
+                final = f"{response}\n\n⚡ {rounds} шагов за {elapsed:.1f}с"
+
+            status = "✅" if True else "❌"
+            preview = final[:200]
             log.info(f"Результат: {status} {preview}...")
 
-            resp2 = requests.post(
+            requests.post(
                 f"{SERVER_URL}/agent/task/{tid}/result",
-                json=result,
-                timeout=10,
+                json={"success": True, "result": final.strip()},
+                timeout=30,
             )
-            if resp2.status_code == 200:
-                log.info(f"Результат отправлен")
-            else:
-                log.warning(f"Ошибка отправки: {resp2.status_code}")
+
+            _notify("Super ASK", f"✅ Ответ получен ({elapsed:.1f}с)")
 
         except requests.ConnectionError:
-            log.warning(f"Нет соединения с {SERVER_URL}. Повтор через 10с...")
+            log.warning(f"Нет соединения. Повтор через 10с...")
             time.sleep(10)
         except Exception as e:
             log.error(f"Ошибка: {e}")
             time.sleep(POLL_INTERVAL)
+
+
+# ═══════════════════════════════════════════
+#  Entry
+# ═══════════════════════════════════════════
+
+def main():
+    mode = os.environ.get("SA_AGENT_MODE", "proxy")
+    if mode == "relay":
+        run_relay_mode()
+    else:
+        run_proxy_mode()
 
 
 if __name__ == "__main__":
