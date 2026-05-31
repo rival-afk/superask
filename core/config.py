@@ -17,6 +17,7 @@ DEFAULT_CONFIG = {
     "proxy_enabled": False,
     "server_url": "",
     "api_key": "",
+    "agent_mode": "relay",
 }
 
 
@@ -215,3 +216,18 @@ def set_api_key(key: str):
 def get_api_key() -> str:
     cfg = load()
     return cfg.get("api_key", "")
+
+
+def set_agent_mode(mode: str):
+    mode = mode.strip().lower()
+    if mode not in ("proxy", "relay"):
+        print("[SA] Режим может быть proxy или relay", file=sys.stderr)
+        return
+    cfg = load()
+    cfg["agent_mode"] = mode
+    save(cfg)
+
+
+def get_agent_mode() -> str:
+    cfg = load()
+    return cfg.get("agent_mode", "proxy")
