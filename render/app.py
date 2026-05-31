@@ -69,7 +69,11 @@ def _create_task(params: dict, update: Update) -> str:
 async def webhook_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     log.info(f"/start от {user.id}")
-    text = "🤖 <b>Super ASK</b> — AI-агент для управления ПК через Telegram.\n\nПросто напиши, что нужно сделать."
+    text = (
+        "🤖 <b>Super ASK</b> — AI-агент для управления ПК через Telegram.\n\n"
+        "Просто напиши, что нужно сделать. AI сам выполнит команды.\n\n"
+        "Основан на <b>opencode</b> (github.com/anomalyco/opencode)"
+    )
     if not _is_admin(user.id):
         text += f"\n\n⛔ Доступ только для владельца."
     await update.message.reply_text(text, parse_mode="HTML")
@@ -77,13 +81,13 @@ async def webhook_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def webhook_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📋 Просто напиши, что нужно сделать на ПК.\n"
-        "AI-агент сам выполнит команды и вернёт результат.\n\n"
+        "📋 Напиши что угодно — AI выполнит.\n\n"
         "Примеры:\n"
         "  «покажи свободное место на диске»\n"
         "  «найди файл superask.py»\n"
-        "  «обнови все пакеты»",
-        parse_mode="HTML",
+        "  «проверь доступ к sudo»\n"
+        "  «обнови пакеты»\n"
+        "  «сколько процессов запущено»",
     )
 
 
@@ -94,12 +98,12 @@ async def webhook_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = update.message.text
-    if not text:
+    if not text or text.startswith("/"):
         return
 
-    await update.message.reply_text("⏳ AI-агент думает...")
+    await update.message.reply_text("⏳ AI-агент обрабатывает запрос...")
     tid = _create_task({"text": text}, update)
-    log.info(f"Task {tid[:8]}: {text[:60]}...")
+    log.info(f"Задача {tid[:8]}: {text[:80]}...")
 
 
 async def error_handler(update: Update | None, context: ContextTypes.DEFAULT_TYPE):
@@ -108,7 +112,7 @@ async def error_handler(update: Update | None, context: ContextTypes.DEFAULT_TYP
         log.critical("Токен бота невалиден!")
 
 
-app = FastAPI(title="Super ASK Relay")
+app = FastAPI(title="Super ASK")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 
@@ -121,7 +125,7 @@ async def startup():
         log.critical("BOT_TOKEN не задан!")
         return
 
-    log.info(f"Запуск Super ASK Relay (токен: {token[:12]}...)")
+    log.info(f"Запуск Super ASK (токен: {token[:12]}...)")
     application = Application.builder().token(token).build()
     application.add_handler(CommandHandler("start", webhook_start))
     application.add_handler(CommandHandler("help", webhook_help))
@@ -157,7 +161,11 @@ async def agent_task():
     for tid, task in TASKS.items():
         if task["status"] == "pending":
             task["status"] = "running"
-            return {"id": tid, "text": task["params"].get("text", "")}
+            return {
+                "id": tid,
+                "text": task["params"].get("text", ""),
+                "chat_id": task["chat_id"],
+            }
     return {"id": None}
 
 
@@ -180,9 +188,7 @@ async def _send_result(task: dict):
         return
     chat_id = task["chat_id"]
     result = task.get("result") or task.get("error") or "(пусто)"
-    text = f"✅ {result[:4000]}"
-    if len(result) > 4000:
-        text = text + "\n\n... [обрезано]"
+    text = result[:4000]
     try:
         await application.bot.send_message(chat_id=chat_id, text=text)
     except Exception as e:
@@ -192,7 +198,10 @@ async def _send_result(task: dict):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "pending": sum(1 for t in TASKS.values() if t["status"] == "pending")}
+    return {
+        "status": "ok",
+        "pending": sum(1 for t in TASKS.values() if t["status"] == "pending"),
+    }
 
 
 if __name__ == "__main__":

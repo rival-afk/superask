@@ -2,13 +2,14 @@
 """
 Super ASK — Local Agent
 Опрашивает Render-сервер, получает промпты от пользователя,
-отправляет их в AI-модель (opencode/zen), выполняет tool-вызовы,
-возвращает результат.
+отправляет их в AI (opencode/zen) с контекстом, выполняет tool-вызовы,
+показывает уведомления на ПК, возвращает результат.
 """
 import sys
 import os
 import json
 import time
+import subprocess
 import logging
 from pathlib import Path
 
@@ -33,23 +34,57 @@ log = logging.getLogger("superask.agent")
 SERVER_URL = os.environ.get("SUPERASK_SERVER", "").rstrip("/")
 POLL_INTERVAL = 2
 
+# ── Conversation context ──
+CONTEXTS: dict[int, list[dict]] = {}
+MAX_CONTEXT = 20  # keep last N messages
 
-def process_prompt(text: str) -> dict:
-    """Send prompt to AI, execute tools, return final result."""
+
+def _notify(title: str, message: str):
+    """Desktop notification via notify-send."""
+    try:
+        subprocess.run(
+            ["notify-send", "-a", "Super ASK", title, message[:200]],
+            capture_output=True, timeout=5,
+        )
+    except FileNotFoundError:
+        pass  # notify-send not available
+    except Exception:
+        pass
+
+
+def process_prompt(chat_id: int, text: str) -> dict:
+    """Send to AI with context, return result."""
     log.info(f"Промпт: {text[:100]}...")
 
     api_key = local_config.get_api_key()
     if not api_key:
-        return {"success": False, "error": "API-ключ не задан. Используйте: sa apikey <ключ>"}
+        return {"success": False, "error": "❌ API-ключ не задан. Используйте: sa apikey <ключ>"}
 
-    try:
-        result = ai.process_prompt(text)
-        if not result or not result.strip():
-            result = "(AI не вернул ответ)"
-        return {"success": True, "result": result}
-    except Exception as e:
-        log.error(f"AI ошибка: {e}")
-        return {"success": False, "error": f"❌ Ошибка AI: {e}"}
+    context = CONTEXTS.get(chat_id, [])
+
+    result = ai.process_prompt(text, context=context)
+
+    tool_log = result.get("tool_log", "")
+    response = result.get("response", "")
+    rounds = result.get("rounds", 0)
+    elapsed = result.get("elapsed", 0)
+
+    # Store context
+    CONTEXTS.setdefault(chat_id, [])
+    CONTEXTS[chat_id].append({"role": "user", "content": text})
+    CONTEXTS[chat_id].append({"role": "assistant", "content": response})
+    CONTEXTS[chat_id] = CONTEXTS[chat_id][-MAX_CONTEXT * 2:]
+
+    # Format response with tool log
+    final = response
+    if tool_log and rounds > 1:
+        final = f"{response}\n\n📋 Выполнено ({rounds} шаг, {elapsed:.1f}с):\n<code>{tool_log[:2000]}</code>"
+    elif rounds > 1:
+        final = f"{response}\n\n⚡ {rounds} шагов за {elapsed:.1f}с"
+
+    _notify("Super ASK", f"✅ Ответ получен ({elapsed:.1f}с)")
+
+    return {"success": True, "result": final.strip()}
 
 
 def main():
@@ -60,6 +95,7 @@ def main():
 
     log.info(f"Подключение к {SERVER_URL}")
     log.info("Ожидание задач...")
+    _notify("Super ASK", "Агент запущен и подключён к Render")
 
     while True:
         try:
@@ -76,9 +112,12 @@ def main():
 
             tid = data["id"]
             text = data.get("text", "")
+            chat_id = data.get("chat_id", 0)
             log.info(f"Задача {tid[:8]}: {text[:80]}...")
 
-            result = process_prompt(text)
+            _notify("Super ASK", f"⏳ Обработка: {text[:100]}...")
+
+            result = process_prompt(chat_id, text)
 
             status = "✅" if result["success"] else "❌"
             preview = (result.get("result") or result.get("error") or "")[:200]

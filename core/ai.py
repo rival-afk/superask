@@ -5,7 +5,6 @@ AI-клиент для Super ASK.
 import json
 import logging
 import time
-from typing import Any
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
@@ -17,18 +16,32 @@ log = logging.getLogger("superask.ai")
 ZEN_URL = "https://opencode.ai/zen/v1/chat/completions"
 
 SYSTEM_PROMPT = """Ты — Super ASK, AI-агент для удалённого управления ПК через Telegram.
+Твой пользователь — владелец ПК. Отвечай на том же языке, что и запрос.
 
-У тебя есть набор инструментов для работы с файловой системой, выполнения команд и поиска информации.
+Доступные инструменты (opencode):
+- shell — выполнить любую shell-команду
+- read — прочитать файл
+- write — записать файл
+- edit — отредактировать файл (замена текста)
+- glob — поиск файлов по шаблону
+- grep — поиск текста в файлах
+- webfetch — загрузить URL
+- websearch — поиск в интернете
+- task — запустить подзадачу
+- question — задать вопрос пользователю
+- todowrite — управлять списком задач
+- apply_patch — применить патч
+- skill — загрузить инструкции
 
 Правила:
-1. Когда пользователь даёт задачу — используй инструменты для её выполнения.
-2. Если результат работы инструмента неполный — используй дополнительные инструменты.
-3. Отвечай пользователю на том же языке, на котором написан запрос.
-4. Все пути к файлам должны быть абсолютными.
-5. Если команда требует прав sudo — используй shell с sudo (если sudo настроен).
-6. Если инструмент вернул ошибку — попробуй другой подход и сообщи пользователю.
+1. Для любой задачи используй инструменты. Не предлагай пользователю сделать что-то вручную.
+2. Если не уверен в пути — используй glob/grep для поиска.
+3. Для проверки sudo используй: shell("sudo -n true && echo sudo_ok || echo sudo_fail")
+4. Для long-running команд добавляй timeout (по умолчанию 60000ms).
+5. После выполнения инструментов проанализируй результат и дай понятный ответ пользователю.
+6. Если инструмент вернул ошибку — попробуй другой подход.
 
-Ты можешь выполнить несколько вызовов инструментов последовательно, если это необходимо для достижения цели."""
+Ты можешь вызывать несколько инструментов последовательно."""
 
 
 def _build_tool_defs() -> list[dict]:
@@ -57,7 +70,7 @@ def _call_api(messages: list[dict]) -> dict:
         "messages": messages,
         "tools": _build_tool_defs(),
         "tool_choice": "auto",
-        "max_tokens": 8192,
+        "max_tokens": 12288,
     }).encode()
 
     req = Request(
@@ -72,7 +85,7 @@ def _call_api(messages: list[dict]) -> dict:
     )
 
     try:
-        with urlopen(req, timeout=120) as resp:
+        with urlopen(req, timeout=180) as resp:
             return json.loads(resp.read().decode())
     except HTTPError as e:
         error_body = e.read().decode()
@@ -81,26 +94,43 @@ def _call_api(messages: list[dict]) -> dict:
         raise RuntimeError(f"API connection error: {e.reason}")
 
 
-def _execute_tool(name: str, args: dict) -> str:
+def _execute_tool(name: str, args: dict) -> tuple[str, str]:
+    """Execute tool, return (result_summary, full_output)."""
     tool = tools.get_tool(name)
     if not tool:
-        return json.dumps({"error": f"Tool '{name}' not found"})
+        return "", json.dumps({"error": f"Tool '{name}' not found"})
     try:
         result = tool.execute(args)
-        return result.output if result.output else "(empty result)"
+        output = result.output if result.output else "(empty result)"
+        summary = output[:200].replace("\n", " ").strip()
+        return summary, output
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return str(e), json.dumps({"error": str(e)})
 
 
-def process_prompt(user_text: str) -> str:
-    """Send user prompt to AI, handle tool call loop, return final response."""
+def process_prompt(user_text: str, context: list[dict] = None) -> dict:
+    """
+    Send user prompt to AI, handle tool call loop.
+    Returns: {
+        "response": str — финальный ответ AI,
+        "tool_log": str — лог выполненных инструментов,
+        "rounds": int — количество раундов tool calling
+    }
+    """
     start_time = time.time()
+    tool_log: list[str] = []
+
     messages: list[dict] = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_text},
     ]
+    if context:
+        # Keep system prompt, add context messages (skip old system messages)
+        for m in context:
+            if m.get("role") != "system" and m not in messages:
+                messages.append(m)
+    messages.append({"role": "user", "content": user_text})
 
-    max_rounds = 10
+    max_rounds = 15
     for round_idx in range(max_rounds):
         log.info(f"AI round {round_idx + 1}/{max_rounds}")
 
@@ -108,7 +138,13 @@ def process_prompt(user_text: str) -> str:
             response = _call_api(messages)
         except RuntimeError as e:
             log.error(f"API call failed: {e}")
-            return f"❌ Ошибка AI: {e}"
+            elapsed = time.time() - start_time
+            return {
+                "response": f"❌ Ошибка AI: {e}",
+                "tool_log": "\n".join(tool_log),
+                "rounds": round_idx,
+                "elapsed": elapsed,
+            }
 
         choice = response["choices"][0]
         message = choice["message"]
@@ -118,15 +154,26 @@ def process_prompt(user_text: str) -> str:
             elapsed = time.time() - start_time
             content = message.get("content", "") or ""
             log.info(f"AI ответил за {elapsed:.1f}с ({len(content)} символов)")
-            return content
+            return {
+                "response": content,
+                "tool_log": "\n".join(tool_log),
+                "rounds": round_idx + 1,
+                "elapsed": elapsed,
+            }
 
         if finish == "tool_calls":
             tool_calls = message.get("tool_calls", [])
             if not tool_calls:
-                return "❌ AI не вернул ни текста, ни вызовов инструментов."
+                elapsed = time.time() - start_time
+                return {
+                    "response": "❌ AI не вернул ни текста, ни вызовов инструментов.",
+                    "tool_log": "\n".join(tool_log),
+                    "rounds": round_idx + 1,
+                    "elapsed": elapsed,
+                }
 
             log.info(f"AI вызвал {len(tool_calls)} инструментов")
-            messages.append({
+            assistant_msg = {
                 "role": "assistant",
                 "content": message.get("content") or None,
                 "tool_calls": [
@@ -140,7 +187,8 @@ def process_prompt(user_text: str) -> str:
                     }
                     for tc in tool_calls
                 ],
-            })
+            }
+            messages.append(assistant_msg)
 
             for tc in tool_calls:
                 name = tc["function"]["name"]
@@ -150,19 +198,33 @@ def process_prompt(user_text: str) -> str:
                     args = {}
 
                 log.info(f"  → {name}({json.dumps(args)[:100]})")
-                result = _execute_tool(name, args)
-                log.info(f"  ← {result[:200]}...")
+                summary, output = _execute_tool(name, args)
+                log.info(f"  ← {summary[:200]}")
+
+                tool_log.append(f"➜ {name}({json.dumps(args)[:200]})")
+                tool_log.append(f"  {summary[:300]}")
 
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
-                    "content": result[:4000],
+                    "content": output[:6000],
                 })
 
             continue
 
         elapsed = time.time() - start_time
         log.warning(f"Неизвестный finish_reason: {finish}")
-        return message.get("content", "") or f"(finish_reason: {finish})"
+        return {
+            "response": message.get("content", "") or f"(finish_reason: {finish})",
+            "tool_log": "\n".join(tool_log),
+            "rounds": round_idx + 1,
+            "elapsed": elapsed,
+        }
 
-    return "❌ AI превысил лимит итераций. Попробуйте упростить запрос."
+    elapsed = time.time() - start_time
+    return {
+        "response": "❌ AI превысил лимит итераций. Попробуйте упростить запрос.",
+        "tool_log": "\n".join(tool_log),
+        "rounds": max_rounds,
+        "elapsed": elapsed,
+    }
