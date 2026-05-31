@@ -16,6 +16,7 @@ DEFAULT_CONFIG = {
     "proxy_url": "",
     "proxy_enabled": False,
     "server_url": "",
+    "api_key": "",
 }
 
 
@@ -202,3 +203,15 @@ def set_server_url(url: str):
 def get_server_url() -> str:
     cfg = load()
     return cfg.get("server_url", "")
+
+
+def set_api_key(key: str):
+    key = key.strip().strip("\"'")
+    cfg = load()
+    cfg["api_key"] = key
+    save(cfg)
+
+
+def get_api_key() -> str:
+    cfg = load()
+    return cfg.get("api_key", "")
